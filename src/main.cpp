@@ -1,33 +1,32 @@
-#include "value.hpp"
-#include "nn.hpp"
+#include "data.hpp"
 #include <iostream>
 #include <iomanip>
-#include <random>
+#include <string>
 
-int main() {
-    std::mt19937 rng(42);
-    MLP net({22, 16, 16, 3}, rng);
-
-    std::uniform_real_distribution<double> dist(-1.0, 1.0);
-    std::vector<ValuePtr> x;
-    x.reserve(22);
-    for (int i = 0; i < 22; ++i) x.push_back(v(dist(rng)));
-
-    auto logits = net.forward(x);
-    auto params = net.parameters();
+int main(int argc, char** argv) {
+    std::string path = argc > 1 ? argv[1] : "data/CTG.csv";
+    auto ds = load_ctg(path, 0.2, 42);
 
     std::cout << std::fixed << std::setprecision(4);
-    std::cout << "params = " << params.size() << "\n";
-    std::cout << "logits = ";
-    for (const auto& l : logits) std::cout << l->data << " ";
-    std::cout << "\n";
+    std::cout << "train rows = " << ds.X_train.size()
+              << "   test rows = " << ds.X_test.size() << "\n";
+    std::cout << "features   = " << ds.X_train[0].size() << "\n";
 
-    auto loss = logits[0] * logits[0] + logits[1] * logits[1] + logits[2] * logits[2];
-    net.zero_grad();
-    loss->backward();
+    int tr[3] = {0, 0, 0};
+    int te[3] = {0, 0, 0};
+    for (int y : ds.y_train) tr[y]++;
+    for (int y : ds.y_test) te[y]++;
+    std::cout << "train  N=" << tr[0] << "  S=" << tr[1] << "  P=" << tr[2] << "\n";
+    std::cout << "test   N=" << te[0] << "  S=" << te[1] << "  P=" << te[2] << "\n";
 
-    std::cout << "loss = " << loss->data << "\n";
-    std::cout << "w0.grad = " << params[0]->grad << "\n";
-    std::cout << "b_last.grad = " << params.back()->grad << "\n";
+    std::cout << "post-norm train column means (should be ~0):\n";
+    for (size_t j = 0; j < ds.feat_names.size(); ++j) {
+        double s = 0.0;
+        for (const auto& r : ds.X_train) s += r[j];
+        s /= static_cast<double>(ds.X_train.size());
+        std::cout << "  " << ds.feat_names[j] << "  mu=" << s
+                  << "  raw_mean=" << ds.feat_mean[j]
+                  << "  raw_std=" << ds.feat_std[j] << "\n";
+    }
     return 0;
 }
