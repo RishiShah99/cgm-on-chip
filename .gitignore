@@ -8,3 +8,4 @@ src/*.o
 build/
 train.log
 out.log
+CTG.xls
