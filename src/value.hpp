@@ -44,3 +44,4 @@ ValuePtr vexp(const ValuePtr& a);
 ValuePtr vlog(const ValuePtr& a);
 ValuePtr vtanh(const ValuePtr& a);
 ValuePtr vrelu(const ValuePtr& a);
+ValuePtr vgelu(const ValuePtr& a);

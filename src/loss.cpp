@@ -20,3 +20,10 @@ std::vector<ValuePtr> softmax(const std::vector<ValuePtr>& logits) {
 ValuePtr cross_entropy(const std::vector<ValuePtr>& probs, int label) {
     return -vlog(probs[static_cast<size_t>(label)]);
 }
+
+ValuePtr cross_entropy_weighted(const std::vector<ValuePtr>& probs,
+                                int label,
+                                const std::vector<double>& class_weights) {
+    return class_weights[static_cast<size_t>(label)]
+         * (-vlog(probs[static_cast<size_t>(label)]));
+}

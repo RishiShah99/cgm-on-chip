@@ -47,7 +47,10 @@ static bool try_parse_double(const std::string& s, double& out) {
     }
 }
 
-Dataset load_ctg(const std::string& csv_path, double test_frac, uint32_t seed) {
+Dataset load_ctg(const std::string& csv_path,
+                 double val_frac,
+                 double test_frac,
+                 uint32_t seed) {
     std::ifstream file(csv_path);
     if (!file.is_open()) throw std::runtime_error("cannot open " + csv_path);
 
@@ -100,24 +103,26 @@ Dataset load_ctg(const std::string& csv_path, double test_frac, uint32_t seed) {
     std::vector<std::vector<size_t>> by_class(3);
     for (size_t i = 0; i < y.size(); ++i) by_class[y[i]].push_back(i);
 
-    std::vector<size_t> train_idx, test_idx;
+    std::vector<size_t> train_idx, val_idx, test_idx;
     for (int c = 0; c < 3; ++c) {
         std::shuffle(by_class[c].begin(), by_class[c].end(), rng);
         size_t n_test = static_cast<size_t>(test_frac * by_class[c].size());
+        size_t n_val  = static_cast<size_t>(val_frac  * by_class[c].size());
         for (size_t i = 0; i < by_class[c].size(); ++i) {
-            if (i < n_test) test_idx.push_back(by_class[c][i]);
-            else train_idx.push_back(by_class[c][i]);
+            if (i < n_test)             test_idx.push_back(by_class[c][i]);
+            else if (i < n_test + n_val) val_idx.push_back(by_class[c][i]);
+            else                         train_idx.push_back(by_class[c][i]);
         }
     }
 
     Dataset ds;
     ds.feat_names = kFeatureNames;
-    ds.X_train.reserve(train_idx.size());
-    ds.y_train.reserve(train_idx.size());
+    ds.X_train.reserve(train_idx.size()); ds.y_train.reserve(train_idx.size());
     for (size_t i : train_idx) { ds.X_train.push_back(X[i]); ds.y_train.push_back(y[i]); }
-    ds.X_test.reserve(test_idx.size());
-    ds.y_test.reserve(test_idx.size());
-    for (size_t i : test_idx) { ds.X_test.push_back(X[i]); ds.y_test.push_back(y[i]); }
+    ds.X_val.reserve(val_idx.size());     ds.y_val.reserve(val_idx.size());
+    for (size_t i : val_idx)   { ds.X_val.push_back(X[i]);   ds.y_val.push_back(y[i]); }
+    ds.X_test.reserve(test_idx.size());   ds.y_test.reserve(test_idx.size());
+    for (size_t i : test_idx)  { ds.X_test.push_back(X[i]);  ds.y_test.push_back(y[i]); }
 
     size_t F = kFeatureNames.size();
     ds.feat_mean.assign(F, 0.0);
@@ -138,10 +143,14 @@ Dataset load_ctg(const std::string& csv_path, double test_frac, uint32_t seed) {
         if (ds.feat_std[j] < 1e-12) ds.feat_std[j] = 1.0;
     }
 
-    for (auto& row : ds.X_train)
-        for (size_t j = 0; j < F; ++j) row[j] = (row[j] - ds.feat_mean[j]) / ds.feat_std[j];
-    for (auto& row : ds.X_test)
-        for (size_t j = 0; j < F; ++j) row[j] = (row[j] - ds.feat_mean[j]) / ds.feat_std[j];
+    auto normalize = [&](std::vector<std::vector<double>>& M) {
+        for (auto& row : M)
+            for (size_t j = 0; j < F; ++j)
+                row[j] = (row[j] - ds.feat_mean[j]) / ds.feat_std[j];
+    };
+    normalize(ds.X_train);
+    normalize(ds.X_val);
+    normalize(ds.X_test);
 
     return ds;
 }

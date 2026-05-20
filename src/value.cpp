@@ -134,3 +134,22 @@ ValuePtr vrelu(const ValuePtr& a) {
     };
     return out;
 }
+
+ValuePtr vgelu(const ValuePtr& a) {
+    const double k0 = 0.7978845608028654;
+    const double k1 = 0.044715;
+    double x = a->data;
+    double x2 = x * x;
+    double inner = k0 * (x + k1 * x * x2);
+    double t = std::tanh(inner);
+    double out_val = 0.5 * x * (1.0 + t);
+    auto out = std::make_shared<Value>(out_val, std::vector<ValuePtr>{a}, 'g');
+    Value* ap = a.get();
+    Value* op = out.get();
+    double dt_dx = (1.0 - t * t) * k0 * (1.0 + 3.0 * k1 * x2);
+    double dgelu_dx = 0.5 * (1.0 + t) + 0.5 * x * dt_dx;
+    out->backward_fn = [ap, op, dgelu_dx]() {
+        ap->grad += dgelu_dx * op->grad;
+    };
+    return out;
+}
