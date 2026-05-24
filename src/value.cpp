@@ -153,3 +153,29 @@ ValuePtr vgelu(const ValuePtr& a) {
     };
     return out;
 }
+
+ValuePtr vsigmoid(const ValuePtr& a) {
+    double x = a->data;
+    double s = x >= 0.0
+        ? 1.0 / (1.0 + std::exp(-x))
+        : std::exp(x) / (1.0 + std::exp(x));
+    auto out = std::make_shared<Value>(s, std::vector<ValuePtr>{a}, 'S');
+    Value* ap = a.get();
+    Value* op = out.get();
+    out->backward_fn = [ap, op, s]() {
+        ap->grad += s * (1.0 - s) * op->grad;
+    };
+    return out;
+}
+
+ValuePtr vabs(const ValuePtr& a) {
+    double x = a->data;
+    double sgn = x > 0.0 ? 1.0 : (x < 0.0 ? -1.0 : 0.0);
+    auto out = std::make_shared<Value>(std::fabs(x), std::vector<ValuePtr>{a}, 'A');
+    Value* ap = a.get();
+    Value* op = out.get();
+    out->backward_fn = [ap, op, sgn]() {
+        ap->grad += sgn * op->grad;
+    };
+    return out;
+}

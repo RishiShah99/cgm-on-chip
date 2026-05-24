@@ -45,3 +45,5 @@ ValuePtr vlog(const ValuePtr& a);
 ValuePtr vtanh(const ValuePtr& a);
 ValuePtr vrelu(const ValuePtr& a);
 ValuePtr vgelu(const ValuePtr& a);
+ValuePtr vsigmoid(const ValuePtr& a);
+ValuePtr vabs(const ValuePtr& a);
