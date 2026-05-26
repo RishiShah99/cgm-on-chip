@@ -47,6 +47,7 @@ struct Args {
     int threads = 0;
     std::string save_weights;
     std::string load_weights;
+    std::string resume_from;   // prefix; loads <prefix>.last + <prefix>.state.json
     bool eval_only = false;
     int osdn_layers = 1;
     int input_channels = 7;
@@ -92,6 +93,7 @@ static Args parse(int argc, char** argv) {
         else if (k == "--dump-test-probs") a.dump_test_probs = v_str();
         else if (k == "--val-ids") a.val_ids_csv = v_str();
         else if (k == "--test-ids") a.test_ids_csv = v_str();
+        else if (k == "--resume") a.resume_from = v_str();
         else { std::cerr << "unknown arg: " << k << "\n"; std::exit(2); }
     }
     return a;
@@ -543,6 +545,10 @@ int main(int argc, char** argv) {
               << "  threads=" << n_threads
               << " (hw_concurrency=" << hw << ")\n";
 
+    if (!a.load_weights.empty() && !a.resume_from.empty()) {
+        std::cerr << "--load-weights and --resume are mutually exclusive\n";
+        return 2;
+    }
     if (!a.load_weights.empty()) {
         std::ifstream wf(a.load_weights, std::ios::binary);
         if (!wf.is_open()) {
@@ -557,6 +563,66 @@ int main(int argc, char** argv) {
         std::cout << "  loaded weights from " << a.load_weights << "\n";
     }
     std::cout << "\n";
+
+    bool select_by_auroc = (a.select_by == "auroc");
+
+    // --- write config JSON BEFORE training starts ---
+    // Anyone who reads results/<run>.json mid-training sees what was being trained.
+    // End-of-training overwrites the same file with full results.
+    auto write_results_json = [&](int best_ep, double best_score, int last_completed_ep,
+                                  const char* status,
+                                  const EvalReport* td05, double thr80,
+                                  const EvalReport* td80, double ms_per_window) {
+        std::ofstream rf(a.results);
+        if (!rf.is_open()) return;
+        rf << std::fixed << std::setprecision(4);
+        rf << "{\n"
+           << "  \"status\": \"" << status << "\",\n"
+           << "  \"csv\": \"" << a.csv << "\",\n"
+           << "  \"arch\": \"" << a.arch << "\",\n"
+           << "  \"osdn_layers\": " << a.osdn_layers << ",\n"
+           << "  \"input_channels\": " << a.input_channels << ",\n"
+           << "  \"pred_loss_weight\": " << a.pred_loss_weight << ",\n"
+           << "  \"aux_cls_weight\": " << a.aux_cls_weight << ",\n"
+           << "  \"H\": " << a.H << ", \"N\": " << a.N << ", \"dt\": " << a.dt << ",\n"
+           << "  \"lookback\": " << a.lookback << ", \"horizon\": " << a.horizon
+           << ", \"step_min\": " << a.step_min << ", \"hypo\": " << a.hypo << ",\n"
+           << "  \"window_stride\": " << a.window_stride << ",\n"
+           << "  \"epochs\": " << a.epochs << ", \"batch\": " << a.batch
+           << ", \"lr\": " << a.lr << ", \"wd\": " << a.wd << ",\n"
+           << "  \"seed\": " << a.seed << ", \"grad_clip\": " << a.grad_clip
+           << ", \"post_bolus\": " << a.post_bolus << ",\n"
+           << "  \"val_ids\": \"" << a.val_ids_csv << "\",\n"
+           << "  \"test_ids\": \"" << a.test_ids_csv << "\",\n"
+           << "  \"params\": " << params.size() << ",\n"
+           << "  \"threads\": " << n_threads << ",\n"
+           << "  \"train_pos\": " << n_pos << ", \"train_neg\": " << n_neg << ",\n"
+           << "  \"pos_weight\": " << pos_w << ", \"select_by\": \"" << a.select_by << "\",\n"
+           << "  \"norm_mean\": " << mean << ", \"norm_sd\": " << sd << ",\n"
+           << "  \"last_completed_epoch\": " << last_completed_ep << ",\n"
+           << "  \"best_epoch\": " << best_ep
+           << ", \"best_val_" << (select_by_auroc ? "auroc" : "loss") << "\": " << best_score;
+        if (td05 && td80) {
+            rf << ",\n"
+               << "  \"test_thr05\": { \"acc\": " << td05->acc
+               << ", \"recall\": " << td05->recall
+               << ", \"specificity\": " << td05->specificity
+               << ", \"pb_recall\": " << td05->recall_post_bolus
+               << ", \"auroc_approx\": " << td05->auroc_approx << " },\n"
+               << "  \"test_thr_spec80\": { \"thr\": " << thr80
+               << ", \"acc\": " << td80->acc
+               << ", \"recall\": " << td80->recall
+               << ", \"specificity\": " << td80->specificity
+               << ", \"pb_recall\": " << td80->recall_post_bolus
+               << ", \"auroc_approx\": " << td80->auroc_approx << " },\n"
+               << "  \"inference_ms_per_window\": " << ms_per_window << "\n";
+        } else {
+            rf << "\n";
+        }
+        rf << "}\n";
+    };
+    write_results_json(/*best_ep=*/-1, /*best_score=*/-1.0, /*last_completed_ep=*/0,
+                       "in_progress", nullptr, 0.0, nullptr, 0.0);
 
     std::vector<std::unique_ptr<Net>> worker_nets;
     worker_nets.reserve(n_threads);
@@ -583,10 +649,76 @@ int main(int argc, char** argv) {
     std::vector<size_t> order(ds.train.size());
     std::iota(order.begin(), order.end(), 0);
 
-    bool select_by_auroc = (a.select_by == "auroc");
     double best_score = select_by_auroc ? -1.0 : 1e9;
     int    best_ep  = 0;
+    int    start_epoch = 1;
     std::vector<double> best_params(params.size());
+
+    auto read_blob_into = [&](const std::string& path, std::vector<double>& out) -> bool {
+        std::ifstream f(path, std::ios::binary);
+        if (!f.is_open()) return false;
+        for (size_t i = 0; i < out.size(); ++i) {
+            float fv = 0.0f;
+            if (!f.read(reinterpret_cast<char*>(&fv), sizeof(float))) return false;
+            out[i] = static_cast<double>(fv);
+        }
+        return true;
+    };
+
+    if (!a.resume_from.empty()) {
+        const std::string last_path  = a.resume_from + ".last";
+        const std::string best_path  = a.resume_from + ".best";
+        const std::string state_path = a.resume_from + ".state.json";
+        std::vector<double> last_w(params.size());
+        if (!read_blob_into(last_path, last_w)) {
+            std::cerr << "--resume: cannot read " << last_path << "\n";
+            return 4;
+        }
+        for (size_t i = 0; i < params.size(); ++i) params[i]->data = last_w[i];
+
+        if (!read_blob_into(best_path, best_params)) {
+            std::cerr << "--resume: cannot read " << best_path << "\n";
+            return 4;
+        }
+
+        std::ifstream sf(state_path);
+        if (!sf.is_open()) {
+            std::cerr << "--resume: cannot read " << state_path << "\n";
+            return 4;
+        }
+        // tiny ad-hoc JSON reader: find "key": value pairs we care about.
+        std::string blob((std::istreambuf_iterator<char>(sf)),
+                          std::istreambuf_iterator<char>());
+        auto find_num = [&](const std::string& key) -> double {
+            std::string needle = "\"" + key + "\"";
+            auto p = blob.find(needle);
+            if (p == std::string::npos) return std::nan("");
+            p = blob.find(':', p);
+            if (p == std::string::npos) return std::nan("");
+            return std::stod(blob.substr(p + 1));
+        };
+        double v_pc  = find_num("param_count");
+        double v_lce = find_num("last_completed_epoch");
+        double v_be  = find_num("best_epoch");
+        double v_bs  = find_num("best_score");
+        if (std::isnan(v_pc) || static_cast<size_t>(v_pc) != params.size()) {
+            std::cerr << "--resume: param_count in state.json (" << v_pc
+                      << ") does not match current build (" << params.size() << ")\n";
+            return 4;
+        }
+        if (std::isnan(v_lce) || std::isnan(v_be) || std::isnan(v_bs)) {
+            std::cerr << "--resume: state.json missing required fields\n";
+            return 4;
+        }
+        start_epoch = static_cast<int>(v_lce) + 1;
+        best_ep    = static_cast<int>(v_be);
+        best_score = v_bs;
+        std::cout << "  resumed from " << a.resume_from
+                  << "  start_epoch=" << start_epoch
+                  << "  best_ep=" << best_ep
+                  << "  best_score=" << best_score << "\n"
+                  << "  NOTE: Adam moment state is not persisted; moments reset on resume.\n";
+    }
 
     auto t0 = std::chrono::steady_clock::now();
     if (a.eval_only) {
@@ -595,7 +727,7 @@ int main(int argc, char** argv) {
         best_ep = 0;
         best_score = 0.0;
     }
-    for (int ep = 1; !a.eval_only && ep <= a.epochs; ++ep) {
+    for (int ep = start_epoch; !a.eval_only && ep <= a.epochs; ++ep) {
         std::cout << "ep " << std::setw(3) << ep << "  [training " << order.size() << " windows...]\n";
         std::shuffle(order.begin(), order.end(), rng);
         double loss_sum = 0.0;
@@ -722,7 +854,24 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < params.size(); ++i) cur[i] = params[i]->data;
             write_blob(a.save_weights + ".last", cur);
             if (improved) write_blob(a.save_weights + ".best", best_params);
+
+            // Per-epoch resume state — written AFTER both .last and (possibly) .best
+            // so a crash mid-write can't leave state pointing at non-existent weights.
+            std::ofstream sf(a.save_weights + ".state.json");
+            if (sf.is_open()) {
+                sf << std::fixed << std::setprecision(6) << "{\n"
+                   << "  \"param_count\": " << params.size() << ",\n"
+                   << "  \"last_completed_epoch\": " << ep << ",\n"
+                   << "  \"best_epoch\": " << best_ep << ",\n"
+                   << "  \"best_score\": " << best_score << ",\n"
+                   << "  \"select_by\": \"" << a.select_by << "\",\n"
+                   << "  \"pos_w\": " << pos_w << ",\n"
+                   << "  \"norm_mean\": " << mean << ", \"norm_sd\": " << sd << "\n"
+                   << "}\n";
+            }
         }
+        write_results_json(best_ep, best_score, ep, "in_progress",
+                           nullptr, 0.0, nullptr, 0.0);
     }
 
     for (size_t i = 0; i < params.size(); ++i) params[i]->data = best_params[i];
@@ -800,39 +949,8 @@ int main(int argc, char** argv) {
     double ms_per_window = 1000.0 * std::chrono::duration<double>(t_inf1 - t_inf0).count() / std::max(1, n_inf);
     std::cout << "  inference: " << std::setprecision(2) << ms_per_window << " ms / window\n";
 
-    std::ofstream rf(a.results);
-    if (rf.is_open()) {
-        rf << std::fixed << std::setprecision(4);
-        rf << "{\n"
-           << "  \"csv\": \"" << a.csv << "\",\n"
-           << "  \"arch\": \"" << a.arch << "\",\n"
-           << "  \"osdn_layers\": " << a.osdn_layers << ",\n"
-           << "  \"input_channels\": " << a.input_channels << ",\n"
-           << "  \"pred_loss_weight\": " << a.pred_loss_weight << ",\n"
-           << "  \"aux_cls_weight\": " << a.aux_cls_weight << ",\n"
-           << "  \"H\": " << a.H << ", \"N\": " << a.N << ", \"dt\": " << a.dt << ",\n"
-           << "  \"lookback\": " << a.lookback << ", \"horizon\": " << a.horizon
-           << ", \"step_min\": " << a.step_min << ", \"hypo\": " << a.hypo << ",\n"
-           << "  \"params\": " << params.size() << ",\n"
-           << "  \"threads\": " << n_threads << ",\n"
-           << "  \"train_pos\": " << n_pos << ", \"train_neg\": " << n_neg << ",\n"
-           << "  \"pos_weight\": " << pos_w << ", \"select_by\": \"" << a.select_by << "\",\n"
-           << "  \"best_epoch\": " << best_ep
-           << ", \"best_val_" << (select_by_auroc ? "auroc" : "loss") << "\": " << best_score << ",\n"
-           << "  \"test_thr05\": { \"acc\": " << test_default.acc
-           << ", \"recall\": " << test_default.recall
-           << ", \"specificity\": " << test_default.specificity
-           << ", \"pb_recall\": " << test_default.recall_post_bolus
-           << ", \"auroc_approx\": " << test_default.auroc_approx << " },\n"
-           << "  \"test_thr_spec80\": { \"thr\": " << thr80
-           << ", \"acc\": " << test_at_80.acc
-           << ", \"recall\": " << test_at_80.recall
-           << ", \"specificity\": " << test_at_80.specificity
-           << ", \"pb_recall\": " << test_at_80.recall_post_bolus
-           << ", \"auroc_approx\": " << test_at_80.auroc_approx << " },\n"
-           << "  \"inference_ms_per_window\": " << ms_per_window << "\n"
-           << "}\n";
-        std::cout << "\n  results -> " << a.results << "\n";
-    }
+    write_results_json(best_ep, best_score, a.epochs, "complete",
+                       &test_default, thr80, &test_at_80, ms_per_window);
+    std::cout << "\n  results -> " << a.results << "\n";
     return 0;
 }
