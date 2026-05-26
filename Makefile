@@ -44,6 +44,13 @@ $(BLOB2H): $(BLOB2H_SRC)
 	$(CXX) $(CXXFLAGS) $(BLOB2H_SRC) -o $@ $(LDFLAGS)
 
 clean:
-	rm -f src/*.o $(CTG) $(CTG).exe $(DEMO) $(DEMO).exe $(CGM_SMOKE) $(CGM_SMOKE).exe $(CGM_DEMO) $(CGM_DEMO).exe $(CGM_TRAIN) $(CGM_TRAIN).exe
+	rm -f src/*.o \
+	      $(CTG) $(CTG).exe \
+	      $(DEMO) $(DEMO).exe \
+	      $(CGM_SMOKE) $(CGM_SMOKE).exe \
+	      $(CGM_DEMO) $(CGM_DEMO).exe \
+	      $(CGM_TRAIN) $(CGM_TRAIN).exe \
+	      $(CGM_INFTEST) $(CGM_INFTEST).exe \
+	      $(BLOB2H) $(BLOB2H).exe
 
 .PHONY: all clean
