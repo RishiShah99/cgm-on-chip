@@ -136,7 +136,9 @@ std::vector<std::vector<ValuePtr>> OSDNLayer::forward(
         ValuePtr dot_dk2 = v(0.0);
         for (int i = 0; i < K; ++i) dot_dk2 = dot_dk2 + d[i] * k_sq[i];
         ValuePtr gate_term = v(1.0) - beta * dot_dk2;
-        ValuePtr norm_inv = v(1.0) / (k_sqsum + v(eps));
+        // paper-exact floor: n_t = max(‖k‖², ε)  →  relu(x - ε) + ε
+        ValuePtr norm = vrelu(k_sqsum - v(eps)) + v(eps);
+        ValuePtr norm_inv = v(1.0) / norm;
         ValuePtr scale = v(eta) * beta * gate_term * norm_inv;
         for (int i = 0; i < K; ++i) {
             d[i] = d[i] + scale * k_sq[i];
