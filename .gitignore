@@ -22,3 +22,5 @@ results/
 viz/
 
 *.md
+!README.md
+!**/README.md
