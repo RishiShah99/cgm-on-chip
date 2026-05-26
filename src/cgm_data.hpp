@@ -40,14 +40,18 @@ struct CGMDataset {
 
 std::vector<CGMRecord> load_cgm_csv(const std::string& path);
 
+struct PatientSplitPolicy {
+    std::vector<std::string> val_ids;
+    std::vector<std::string> test_ids;
+};
+
 CGMDataset make_windows(const std::vector<CGMRecord>& records,
                         int lookback_steps,
                         int horizon_steps,
                         int step_minutes,
                         double hypo_threshold,
                         int post_bolus_max_min,
-                        double val_frac,
-                        double test_frac,
+                        const PatientSplitPolicy& policy,
                         uint32_t seed,
                         int window_stride = 1);
 

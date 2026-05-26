@@ -243,8 +243,13 @@ int main(int argc, char** argv) {
               << c::reset << "\n";
 
     auto records = load_cgm_csv(a.csv);
+    // Step 2 (patient-disjoint split): hardcode Ohio T1DM 8/2/2 split here.
+    // Step 5 will rewrite this demo around the strict header-validating loader.
+    PatientSplitPolicy policy;
+    policy.val_ids  = {"584", "588"};
+    policy.test_ids = {"591", "596"};
     auto ds = make_windows(records, a.lookback, a.horizon, a.step_min,
-                           a.hypo, a.post_bolus, 0.15, 0.15, a.seed, a.window_stride);
+                           a.hypo, a.post_bolus, policy, a.seed, a.window_stride);
     std::vector<std::vector<double>> raw_lookback;
     raw_lookback.reserve(ds.test.size());
     for (const auto& w : ds.test) raw_lookback.push_back(w.lookback);

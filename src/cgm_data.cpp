@@ -112,8 +112,7 @@ CGMDataset make_windows(const std::vector<CGMRecord>& records,
                         int step_minutes,
                         double hypo_threshold,
                         int post_bolus_max_min,
-                        double val_frac,
-                        double test_frac,
+                        const PatientSplitPolicy& policy,
                         uint32_t seed,
                         int window_stride)
 {
@@ -125,7 +124,26 @@ CGMDataset make_windows(const std::vector<CGMRecord>& records,
     ds.hypo_threshold = hypo_threshold;
     ds.post_bolus_max_min = post_bolus_max_min;
 
-    std::vector<CGMWindow> all;
+    // --- patient-disjoint split validation ---
+    std::unordered_map<std::string, int> fold;  // 0=train, 1=val, 2=test
+    for (const auto& rec : records) fold.emplace(rec.patient_id, 0);
+
+    auto assign = [&](const std::vector<std::string>& ids, int code, const char* name) {
+        for (const auto& id : ids) {
+            auto it = fold.find(id);
+            if (it == fold.end()) {
+                throw std::runtime_error("split policy references unknown patient_id '"
+                                         + id + "' (not present in CSV) for fold " + name);
+            }
+            if (it->second != 0) {
+                throw std::runtime_error("patient_id '" + id
+                                         + "' appears in more than one fold");
+            }
+            it->second = code;
+        }
+    };
+    assign(policy.val_ids, 1, "val");
+    assign(policy.test_ids, 2, "test");
 
     for (const auto& rec : records) {
         if (rec.t_min.size() < static_cast<size_t>(lookback_steps + horizon_steps + 2)) continue;
@@ -192,18 +210,41 @@ CGMDataset make_windows(const std::vector<CGMRecord>& records,
             w.future_min_glucose = mn;
             w.label = mn < hypo_threshold ? 1 : 0;
             w.in_post_bolus_window = any_recent(rec.bolus_t_min, t_now, post_bolus_max_min);
-            all.push_back(std::move(w));
+            int code = fold[rec.patient_id];
+            if      (code == 1) ds.val.push_back(std::move(w));
+            else if (code == 2) ds.test.push_back(std::move(w));
+            else                ds.train.push_back(std::move(w));
         }
     }
 
     std::mt19937 rng(seed);
-    std::shuffle(all.begin(), all.end(), rng);
-    size_t n = all.size();
-    size_t n_test = static_cast<size_t>(n * test_frac);
-    size_t n_val  = static_cast<size_t>(n * val_frac);
-    ds.test.assign(all.begin(), all.begin() + n_test);
-    ds.val.assign(all.begin() + n_test, all.begin() + n_test + n_val);
-    ds.train.assign(all.begin() + n_test + n_val, all.end());
+    std::shuffle(ds.train.begin(), ds.train.end(), rng);
+    std::shuffle(ds.val.begin(),   ds.val.end(),   rng);
+    std::shuffle(ds.test.begin(),  ds.test.end(),  rng);
+
+    // Assert pairwise-disjoint patient_id sets across folds. Cheap belt-and-braces:
+    // the fold[] code above already guarantees each patient lives in one bucket,
+    // but verifying the actual windows catches future regressions in the assign logic.
+    auto ids_in = [](const std::vector<CGMWindow>& v) {
+        std::unordered_map<std::string, int> s;
+        for (const auto& w : v) s[w.patient_id] = 1;
+        return s;
+    };
+    auto train_ids = ids_in(ds.train);
+    auto val_ids   = ids_in(ds.val);
+    auto test_ids  = ids_in(ds.test);
+    auto overlap = [](const std::unordered_map<std::string, int>& a,
+                      const std::unordered_map<std::string, int>& b,
+                      const char* an, const char* bn) {
+        for (const auto& kv : a)
+            if (b.count(kv.first))
+                throw std::runtime_error(std::string("patient '") + kv.first
+                                         + "' present in both " + an + " and " + bn);
+    };
+    overlap(train_ids, val_ids,  "train", "val");
+    overlap(train_ids, test_ids, "train", "test");
+    overlap(val_ids,   test_ids, "val",   "test");
+
     return ds;
 }
 

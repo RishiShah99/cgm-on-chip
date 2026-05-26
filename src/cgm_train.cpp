@@ -17,10 +17,14 @@
 #include <mutex>
 #include <condition_variable>
 #include <functional>
+#include <unordered_set>
+#include <cctype>
 
 struct Args {
-    std::string csv = "data/shanghai_t1dm.csv";
+    std::string csv = "data/ohio_t1dm.csv";
     std::string results = "results/cgm.json";
+    std::string val_ids_csv;   // comma-separated patient IDs for val fold (required)
+    std::string test_ids_csv;  // comma-separated patient IDs for test fold (required)
     std::string arch = "s4d";
     int lookback = 96;
     int horizon  = 12;
@@ -86,6 +90,8 @@ static Args parse(int argc, char** argv) {
         else if (k == "--pred-loss-weight") a.pred_loss_weight = std::stod(v_str());
         else if (k == "--aux-cls-weight") a.aux_cls_weight = std::stod(v_str());
         else if (k == "--dump-test-probs") a.dump_test_probs = v_str();
+        else if (k == "--val-ids") a.val_ids_csv = v_str();
+        else if (k == "--test-ids") a.test_ids_csv = v_str();
         else { std::cerr << "unknown arg: " << k << "\n"; std::exit(2); }
     }
     return a;
@@ -422,9 +428,51 @@ int main(int argc, char** argv) {
     }
     std::cout << "  patients=" << records.size() << "\n";
 
-    CGMDataset ds = make_windows(records, a.lookback, a.horizon, a.step_min,
-                                 a.hypo, a.post_bolus, 0.15, 0.15, a.seed,
-                                 a.window_stride);
+    if (a.val_ids_csv.empty() || a.test_ids_csv.empty()) {
+        std::cerr << "step-2 split requires explicit --val-ids and --test-ids "
+                     "(comma-separated patient IDs).\n"
+                     "  Ohio T1DM 8/2/2 split: --val-ids 584,588 --test-ids 591,596\n";
+        return 2;
+    }
+    auto split_ids = [](const std::string& s) {
+        std::vector<std::string> out;
+        std::string cur;
+        for (char c : s) {
+            if (c == ',') { if (!cur.empty()) out.push_back(cur); cur.clear(); }
+            else if (!std::isspace(static_cast<unsigned char>(c))) cur.push_back(c);
+        }
+        if (!cur.empty()) out.push_back(cur);
+        return out;
+    };
+    PatientSplitPolicy policy;
+    policy.val_ids  = split_ids(a.val_ids_csv);
+    policy.test_ids = split_ids(a.test_ids_csv);
+
+    CGMDataset ds;
+    try {
+        ds = make_windows(records, a.lookback, a.horizon, a.step_min,
+                          a.hypo, a.post_bolus, policy, a.seed,
+                          a.window_stride);
+    } catch (const std::exception& e) {
+        std::cerr << "split error: " << e.what() << "\n";
+        return 2;
+    }
+    auto fold_ids = [](const std::vector<CGMWindow>& v) {
+        std::vector<std::string> ids;
+        std::unordered_set<std::string> seen;
+        for (const auto& w : v) if (seen.insert(w.patient_id).second) ids.push_back(w.patient_id);
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    };
+    auto join_ids = [](const std::vector<std::string>& ids) {
+        std::string out;
+        for (size_t i = 0; i < ids.size(); ++i) { if (i) out += ","; out += ids[i]; }
+        return out;
+    };
+    std::cout << "  split (patient-disjoint):"
+              << "  train=[" << join_ids(fold_ids(ds.train)) << "]"
+              << "  val=["   << join_ids(fold_ids(ds.val))   << "]"
+              << "  test=["  << join_ids(fold_ids(ds.test))  << "]\n";
     double mean = 0.0, sd = 1.0;
     normalize_inplace(ds, mean, sd);
 
