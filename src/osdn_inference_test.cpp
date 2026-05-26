@@ -11,6 +11,7 @@
 #include "value.hpp"
 #include "osdn.hpp"
 #include "osdn_inference.h"
+#include "osdn_blob.hpp"
 #include <iostream>
 #include <iomanip>
 #include <fstream>
@@ -131,23 +132,35 @@ int main(int argc, char** argv) {
             std::cerr << "FAIL: cannot open --load-weights " << load_weights << "\n";
             return 1;
         }
-        wf.seekg(0, std::ios::end);
-        std::streamsize bytes = wf.tellg();
-        wf.seekg(0, std::ios::beg);
-        std::streamsize expected_bytes =
-            static_cast<std::streamsize>(params.size() * sizeof(float));
-        if (bytes != expected_bytes) {
-            std::cerr << "FAIL: weights file is " << bytes
-                      << " bytes, model expects " << expected_bytes
-                      << " (" << params.size() << " floats)\n";
+        osdn_blob::Header h{};
+        std::string err;
+        if (!osdn_blob::read_header(wf, h, err)) {
+            std::cerr << "FAIL: header invalid: " << err << "\n";
+            return 1;
+        }
+        std::string shape_err;
+        if (!osdn_blob::shape_matches(h,
+                static_cast<uint32_t>(H), static_cast<uint32_t>(K),
+                static_cast<uint32_t>(D_in), static_cast<uint32_t>(n_layers),
+                shape_err)) {
+            std::cerr << "FAIL: --load-weights shape mismatch vs CLI\n" << shape_err;
+            return 1;
+        }
+        if (h.param_count != params.size()) {
+            std::cerr << "FAIL: header param_count " << h.param_count
+                      << " ≠ RefNet param count " << params.size() << "\n";
             return 1;
         }
         for (size_t i = 0; i < params.size(); ++i) {
             float fv = 0.0f;
-            wf.read(reinterpret_cast<char*>(&fv), sizeof(float));
+            if (!wf.read(reinterpret_cast<char*>(&fv), sizeof(float))) {
+                std::cerr << "FAIL: short read at float " << i << "\n";
+                return 1;
+            }
             params[i]->data = static_cast<double>(fv);
         }
-        std::cout << "  loaded weights from " << load_weights << " (" << bytes << " bytes)\n";
+        std::cout << "  loaded weights from " << load_weights
+                  << "  (" << osdn_blob::format_header(h) << ")\n";
     }
 
     std::vector<float> blob;

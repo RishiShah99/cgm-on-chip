@@ -3,6 +3,7 @@
 #include "osdn.hpp"
 #include "optim.hpp"
 #include "cgm_data.hpp"
+#include "osdn_blob.hpp"
 #include <iostream>
 #include <iomanip>
 #include <fstream>
@@ -555,12 +556,34 @@ int main(int argc, char** argv) {
             std::cerr << "failed to open --load-weights file: " << a.load_weights << "\n";
             return 4;
         }
+        osdn_blob::Header h{};
+        std::string err;
+        if (!osdn_blob::read_header(wf, h, err)) {
+            std::cerr << "--load-weights: " << err << "\n";
+            return 4;
+        }
+        std::string shape_err;
+        if (!osdn_blob::shape_matches(h,
+                static_cast<uint32_t>(a.H),
+                static_cast<uint32_t>(a.N),
+                static_cast<uint32_t>(a.input_channels),
+                static_cast<uint32_t>(a.osdn_layers),
+                shape_err)) {
+            std::cerr << "--load-weights: shape mismatch\n" << shape_err;
+            return 4;
+        }
+        if (h.param_count != params.size()) {
+            std::cerr << "--load-weights: header param_count " << h.param_count
+                      << " ≠ build expected " << params.size() << "\n";
+            return 4;
+        }
         for (size_t i = 0; i < params.size(); ++i) {
             float fv = 0.0f;
             wf.read(reinterpret_cast<char*>(&fv), sizeof(float));
             params[i]->data = static_cast<double>(fv);
         }
-        std::cout << "  loaded weights from " << a.load_weights << "\n";
+        std::cout << "  loaded weights from " << a.load_weights
+                  << "  (" << osdn_blob::format_header(h) << ")\n";
     }
     std::cout << "\n";
 
@@ -657,6 +680,27 @@ int main(int argc, char** argv) {
     auto read_blob_into = [&](const std::string& path, std::vector<double>& out) -> bool {
         std::ifstream f(path, std::ios::binary);
         if (!f.is_open()) return false;
+        osdn_blob::Header h{};
+        std::string err;
+        if (!osdn_blob::read_header(f, h, err)) {
+            std::cerr << "  --resume: " << path << ": " << err << "\n";
+            return false;
+        }
+        std::string shape_err;
+        if (!osdn_blob::shape_matches(h,
+                static_cast<uint32_t>(a.H),
+                static_cast<uint32_t>(a.N),
+                static_cast<uint32_t>(a.input_channels),
+                static_cast<uint32_t>(a.osdn_layers),
+                shape_err)) {
+            std::cerr << "  --resume: " << path << ": shape mismatch\n" << shape_err;
+            return false;
+        }
+        if (h.param_count != out.size()) {
+            std::cerr << "  --resume: " << path << ": header param_count "
+                      << h.param_count << " ≠ build expected " << out.size() << "\n";
+            return false;
+        }
         for (size_t i = 0; i < out.size(); ++i) {
             float fv = 0.0f;
             if (!f.read(reinterpret_cast<char*>(&fv), sizeof(float))) return false;
@@ -845,6 +889,12 @@ int main(int argc, char** argv) {
                     std::cerr << "  WARN: failed to open checkpoint " << p << "\n";
                     return;
                 }
+                osdn_blob::write_header(wf,
+                    static_cast<uint32_t>(a.H),
+                    static_cast<uint32_t>(a.N),
+                    static_cast<uint32_t>(a.input_channels),
+                    static_cast<uint32_t>(a.osdn_layers),
+                    static_cast<uint32_t>(vals.size()));
                 for (size_t i = 0; i < vals.size(); ++i) {
                     float fv = static_cast<float>(vals[i]);
                     wf.write(reinterpret_cast<const char*>(&fv), sizeof(float));
@@ -889,12 +939,20 @@ int main(int argc, char** argv) {
             std::cerr << "failed to open --save-weights file: " << a.save_weights << "\n";
             return 5;
         }
+        osdn_blob::write_header(wf,
+            static_cast<uint32_t>(a.H),
+            static_cast<uint32_t>(a.N),
+            static_cast<uint32_t>(a.input_channels),
+            static_cast<uint32_t>(a.osdn_layers),
+            static_cast<uint32_t>(params.size()));
         for (size_t i = 0; i < params.size(); ++i) {
             float fv = static_cast<float>(params[i]->data);
             wf.write(reinterpret_cast<const char*>(&fv), sizeof(float));
         }
         std::cout << "  saved weights -> " << a.save_weights
-                  << " (" << (params.size() * sizeof(float)) << " bytes)\n\n";
+                  << " (" << osdn_blob::HEADER_BYTES
+                  << " header bytes + " << (params.size() * sizeof(float))
+                  << " param bytes)\n\n";
     }
 
     auto test_scored = compute_scores(net, ds.test);
