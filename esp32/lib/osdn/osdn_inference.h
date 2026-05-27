@@ -25,8 +25,23 @@
 //   n_t       = max(‖k‖², ε)
 //   gate      = 1 − β · (d ⋅ k²)
 //   d[i]     += (η · β · gate / n_t) · k[i]²
+//   d[i]      = clamp(d[i], 0.5, 2.0)              ← paper §4.2 Π_D
 // with η = 0.003 and ε = 1e-6 as compile-time constants — NOT learnable.
 // The legacy EMA d-update from earlier versions has been removed.
+//
+// Verified envelope (bit-identity to src/osdn.cpp host autograd):
+//   • H=16, K=8,  D_in=7, n_layers=1, L≤144  — PASS, |diff| < 1e-6 on
+//     trained Ohio-brain weights.
+//   • H=16, K=16, D_in=7, n_layers=2, L=144  — FAIL (FP32 NaN). The Π_D
+//     clamp from §4.2 was sufficient to stabilise n_layers=1 K=8 but does
+//     NOT extend to this larger config. Diagnosis hypothesis: at K=16 the
+//     gate-magnitude ceiling β·⟨d,k²⟩ ≤ β·d_max·K = 2K doubles vs K=8, and
+//     layer-2's input is the unbounded post-LN-and-projection output of
+//     layer-1 with no input-side norm. Fixing this would likely require
+//     either (a) key normalisation ‖k‖₂=1 (paper Tier-2 invariant — see
+//     results/tier2_plan.md), or (b) a cross-layer input scaling, or
+//     (c) a smaller d_max. None are speculatively applied; the shipped
+//     brain-mode config (K=8, n_layers=1) is inside the verified envelope.
 //
 #include <cmath>
 #include <cstddef>
@@ -219,8 +234,8 @@ inline void osdn_step(const OSDNLayerW& lw, OSDNLayerS& ls,
     float dot_dk2 = 0.0f;
     for (int i = 0; i < K; ++i) dot_dk2 += ls.d[i] * k_sq[i];
     const float gate_term = 1.0f - beta * dot_dk2;
-    const float floor = (k_sqsum > EPS) ? (k_sqsum - EPS) : 0.0f;
-    const float norm = floor + EPS;
+    const float n_floor = (k_sqsum > EPS) ? (k_sqsum - EPS) : 0.0f;
+    const float norm = n_floor + EPS;
     const float norm_inv = 1.0f / norm;
     const float scale = ETA * beta * gate_term * norm_inv;
     for (int i = 0; i < K; ++i) ls.d[i] += scale * k_sq[i];

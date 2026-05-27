@@ -112,7 +112,7 @@ static ValuePtr bce(ValuePtr logit, int y, double pos_w) {
 }
 
 static double bce_scalar(double z, int y, double pos_w) {
-    double softplus_neg = std::log(1.0 + std::exp(-z));
+    double softplus_neg = std::log1p(std::exp(-z));
     if (y == 1) return pos_w * softplus_neg;
     return z + softplus_neg;
 }
@@ -593,8 +593,19 @@ int main(int argc, char** argv) {
         }
         for (size_t i = 0; i < params.size(); ++i) params[i]->data = last_w[i];
 
+        {
+            std::ifstream best_check(best_path, std::ios::binary);
+            if (!best_check.is_open()) {
+                std::cerr << "--resume: " << best_path << " not found. The "
+                          << "previous run was likely killed before any epoch "
+                          << "produced an improvement, so no .best blob was "
+                          << "ever written. Cannot resume without a best.\n";
+                return 4;
+            }
+        }
         if (!read_blob_into(best_path, best_params)) {
-            std::cerr << "--resume: cannot read " << best_path << "\n";
+            std::cerr << "--resume: cannot read " << best_path
+                      << " (file exists but header/shape failed)\n";
             return 4;
         }
 
@@ -604,6 +615,13 @@ int main(int argc, char** argv) {
             return 4;
         }
         // tiny ad-hoc JSON reader: find "key": value pairs we care about.
+        // HAZARD: this matches the first occurrence of "<key>" anywhere in
+        // the file — including inside string VALUES. Safe today because the
+        // keys we look up (param_count, last_completed_epoch, best_epoch,
+        // best_score) don't appear as substrings of any string value our
+        // writer emits. Adding a future string field whose contents contain
+        // any of those names (e.g. a free-form note) would silently return
+        // the wrong number. Swap to a real JSON parser if that ever changes.
         std::string blob((std::istreambuf_iterator<char>(sf)),
                           std::istreambuf_iterator<char>());
         auto find_num = [&](const std::string& key) -> double {

@@ -297,8 +297,14 @@ int main(int argc, char** argv) {
             int lab = ds.test[s.idx].label;
             if (want_hypo && lab != 1) continue;
             if (!want_hypo && lab != 0) continue;
+            // "Both agree" pick: when hunting a HYPO window we want both p_hypo
+            // high, so min(p_s4d, p_osdn) maximises = both are high. When hunting
+            // a SAFE window we want both p_hypo low, so max(p_s4d, p_osdn)
+            // minimises = both are low. Using min in both branches would let
+            // a single-model dissenter satisfy the "both agree safe" claim.
             double both = want_s4d && want_osdn
-                ? std::min(sig(s.s4d_logit), sig(s.osdn_logit))
+                ? (want_hypo ? std::min(sig(s.s4d_logit), sig(s.osdn_logit))
+                             : std::max(sig(s.s4d_logit), sig(s.osdn_logit)))
                 : sig(want_s4d ? s.s4d_logit : s.osdn_logit);
             double avg = want_s4d && want_osdn
                 ? 0.5 * (sig(s.s4d_logit) + sig(s.osdn_logit))

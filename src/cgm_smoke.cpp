@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
             int pred = p >= 0.5 ? 1 : 0;
             if (pred == s.label) correct++;
             double y = static_cast<double>(s.label);
-            loss_sum += (1.0 - y) * logit->data + std::log(1.0 + std::exp(-logit->data));
+            loss_sum += (1.0 - y) * logit->data + std::log1p(std::exp(-logit->data));
         }
         return { loss_sum / ds.size(), static_cast<double>(correct) / ds.size() };
     };

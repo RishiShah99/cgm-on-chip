@@ -101,7 +101,8 @@ static bool any_recent(const std::vector<int64_t>& times, int64_t now, int max_a
         int64_t age = now - *it;
         if (age < 0) continue;
         if (age <= max_age_min) return true;
-        if (age > max_age_min) return false;
+        return false;  // events sorted ascending; once age > max_age_min,
+                       // every earlier event is even older.
     }
     return false;
 }
@@ -157,6 +158,11 @@ CGMDataset make_windows(const std::vector<CGMRecord>& records,
             // sequence was wrong.
             bool reg = true;
             const int64_t want_dt = static_cast<int64_t>(step_minutes);
+            // Inclusive bound: the last pair checked is
+            // (t[anchor+horizon-1], t[anchor+horizon]). The horizon target
+            // sample at t[anchor+horizon] is consumed downstream by
+            // future_min_*; rejecting windows where that final gap is
+            // irregular is intentional.
             for (size_t k = anchor - lookback_steps;
                  k < anchor + horizon_steps && reg; ++k) {
                 if ((rec.t_min[k + 1] - rec.t_min[k]) != want_dt) reg = false;
