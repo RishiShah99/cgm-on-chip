@@ -1,6 +1,13 @@
 CXX      := g++
 CXXFLAGS := -std=c++17 -O1 -Wall -Wextra
+# DEMOFL: -O0 retained for trainer/test/norm-stats binaries where
+# debuggability under gdb matters more than wall-clock speed.
 DEMOFL   := -std=c++17 -O0 -Wall -Wextra
+# SHOWFL: -O2 for user-facing demo binaries (DEMO, CGM_DEMO). These
+# render inference timings to the terminal and pitched the project's
+# "fast on-device inference" story; building them at -O0 was off-message
+# by 5-10×. No correctness-sensitive binary uses this flag set.
+SHOWFL   := -std=c++17 -O2 -Wall -Wextra
 LDFLAGS  := -Wl,--stack,268435456
 
 COMMON_SRC := src/value.cpp src/nn.cpp src/data.cpp src/loss.cpp src/optim.cpp
@@ -30,13 +37,13 @@ $(CTG): $(CTG_SRC)
 	$(CXX) $(CXXFLAGS) $(CTG_SRC) -o $@ $(LDFLAGS)
 
 $(DEMO): $(DEMO_SRC)
-	$(CXX) $(DEMOFL) $(DEMO_SRC) -o $@ $(LDFLAGS)
+	$(CXX) $(SHOWFL) $(DEMO_SRC) -o $@ $(LDFLAGS)
 
 $(CGM_SMOKE): $(CGM_SRC)
 	$(CXX) $(CXXFLAGS) $(CGM_SRC) -o $@ $(LDFLAGS)
 
 $(CGM_DEMO): $(CGM_DEMO_SRC)
-	$(CXX) $(DEMOFL) $(CGM_DEMO_SRC) -o $@ $(LDFLAGS)
+	$(CXX) $(SHOWFL) $(CGM_DEMO_SRC) -o $@ $(LDFLAGS)
 
 $(CGM_TRAIN): $(CGM_TRAIN_SRC)
 	$(CXX) $(DEMOFL) $(CGM_TRAIN_SRC) -o $@ $(LDFLAGS)
