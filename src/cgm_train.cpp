@@ -701,10 +701,15 @@ int main(int argc, char** argv) {
                     ValuePtr loss = bce(fo.final_logit, s.label, pw);
 
                     if (aux_w > 0.0 && L > 1) {
+                        // Pass pos_w = 1.0 (not pw) so the aux contribution scales as aux_w,
+                        // not aux_w * pos_w. Class-imbalance reweighting is a final-head concern;
+                        // duplicating it at every intermediate-step head makes the effective aux
+                        // budget asymmetric across labels (aux_w * pos_w on positives, aux_w on
+                        // negatives) and prevents aux_w from being tuned independently.
                         ValuePtr aux_sum = v(0.0);
                         int aux_n = 0;
                         for (int t = L / 2; t < L - 1; ++t) {
-                            aux_sum = aux_sum + bce(fo.step_logits[t], s.label, pw);
+                            aux_sum = aux_sum + bce(fo.step_logits[t], s.label, 1.0);
                             aux_n++;
                         }
                         if (aux_n > 0) loss = loss + v(aux_w / aux_n) * aux_sum;
