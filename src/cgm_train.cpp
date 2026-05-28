@@ -20,7 +20,10 @@
 #include <condition_variable>
 #include <functional>
 #include <unordered_set>
+#include <unordered_map>
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
 
 struct Args {
     std::string csv = "data/ohio_t1dm.csv";
@@ -115,6 +118,75 @@ static double bce_scalar(double z, int y, double pos_w) {
     double softplus_neg = std::log1p(std::exp(-z));
     if (y == 1) return pos_w * softplus_neg;
     return z + softplus_neg;
+}
+
+// Minimal hardened parser for the flat top-level JSON object the
+// trainer writes to <prefix>.state.json on every epoch (see line ~810
+// where the resume sidecar is emitted). Returns a key→raw-value-token
+// map; numeric values are returned as their on-wire substring, string
+// values are returned with surrounding quotes stripped. Returns an
+// empty map on any structural failure. The scanner tracks string
+// state and only emits a key when the following non-whitespace byte
+// outside the quotes is ':', which closes the substring-match hazard
+// the old find_num() noted. Nested objects/arrays are slurped as a
+// single token rather than recursed — fine for the current schema.
+static std::unordered_map<std::string, std::string>
+parse_flat_json_object(const std::string& s) {
+    std::unordered_map<std::string, std::string> out;
+    std::size_t i = 0;
+    auto skip_ws = [&]() {
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    };
+    auto scan_string = [&]() -> bool {
+        if (i >= s.size() || s[i] != '"') return false;
+        ++i;
+        while (i < s.size() && s[i] != '"') {
+            if (s[i] == '\\' && i + 1 < s.size()) i += 2;
+            else ++i;
+        }
+        if (i >= s.size()) return false;
+        ++i;
+        return true;
+    };
+    skip_ws();
+    if (i >= s.size() || s[i] != '{') return out;
+    ++i;
+    while (i < s.size()) {
+        skip_ws();
+        if (i < s.size() && s[i] == '}') { ++i; return out; }
+        std::size_t k_start = i;
+        if (!scan_string()) return {};
+        std::string key = s.substr(k_start + 1, (i - 1) - (k_start + 1));
+        skip_ws();
+        if (i >= s.size() || s[i] != ':') return {};
+        ++i;
+        skip_ws();
+        std::size_t v_start = i;
+        if (i < s.size() && s[i] == '"') {
+            if (!scan_string()) return {};
+            out[key] = s.substr(v_start + 1, (i - 1) - (v_start + 1));
+        } else if (i < s.size() && (s[i] == '{' || s[i] == '[')) {
+            int depth = 1;
+            ++i;
+            while (i < s.size() && depth > 0) {
+                if (s[i] == '"') { if (!scan_string()) return {}; continue; }
+                if (s[i] == '{' || s[i] == '[') ++depth;
+                else if (s[i] == '}' || s[i] == ']') --depth;
+                ++i;
+            }
+            if (depth != 0) return {};
+            out[key] = s.substr(v_start, i - v_start);
+        } else {
+            while (i < s.size() && s[i] != ',' && s[i] != '}'
+                   && !std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+            out[key] = s.substr(v_start, i - v_start);
+        }
+        skip_ws();
+        if (i < s.size() && s[i] == ',') { ++i; continue; }
+        if (i < s.size() && s[i] == '}') { ++i; return out; }
+        return {};
+    }
+    return {};
 }
 
 class WorkerPool {
@@ -616,23 +688,40 @@ int main(int argc, char** argv) {
             std::cerr << "--resume: cannot read " << state_path << "\n";
             return 4;
         }
-        // tiny ad-hoc JSON reader: find "key": value pairs we care about.
-        // HAZARD: this matches the first occurrence of "<key>" anywhere in
-        // the file — including inside string VALUES. Safe today because the
-        // keys we look up (param_count, last_completed_epoch, best_epoch,
-        // best_score) don't appear as substrings of any string value our
-        // writer emits. Adding a future string field whose contents contain
-        // any of those names (e.g. a free-form note) would silently return
-        // the wrong number. Swap to a real JSON parser if that ever changes.
+        // Parse the resume sidecar via parse_flat_json_object (above)
+        // rather than substring-matching the raw bytes. The previous
+        // ad-hoc reader matched the first occurrence of "<key>" anywhere
+        // in the file (including inside string values) and called
+        // std::stod on the slice that followed, throwing
+        // std::invalid_argument out of main() if the value was malformed.
         std::string blob((std::istreambuf_iterator<char>(sf)),
                           std::istreambuf_iterator<char>());
+        const auto state_kv = parse_flat_json_object(blob);
+        if (state_kv.empty()) {
+            std::cerr << "--resume: " << state_path
+                      << ": could not parse as a flat JSON object\n";
+            return 4;
+        }
         auto find_num = [&](const std::string& key) -> double {
-            std::string needle = "\"" + key + "\"";
-            auto p = blob.find(needle);
-            if (p == std::string::npos) return std::nan("");
-            p = blob.find(':', p);
-            if (p == std::string::npos) return std::nan("");
-            return std::stod(blob.substr(p + 1));
+            auto it = state_kv.find(key);
+            if (it == state_kv.end()) return std::nan("");
+            const std::string& tok = it->second;
+            if (tok.empty()) return std::nan("");
+            const char* start = tok.c_str();
+            char* end_ptr = nullptr;
+            errno = 0;
+            double val = std::strtod(start, &end_ptr);
+            if (end_ptr == start) {
+                std::cerr << "--resume: " << state_path << ": \"" << key
+                          << "\" value \"" << tok << "\" is not a number\n";
+                return std::nan("");
+            }
+            if (errno == ERANGE) {
+                std::cerr << "--resume: " << state_path << ": \"" << key
+                          << "\" value \"" << tok << "\" is out of range\n";
+                return std::nan("");
+            }
+            return val;
         };
         double v_pc  = find_num("param_count");
         double v_lce = find_num("last_completed_epoch");
