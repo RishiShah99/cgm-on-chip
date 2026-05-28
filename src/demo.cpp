@@ -12,19 +12,38 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <cstdio>
+#ifdef _WIN32
+  #include <io.h>
+  #define ISATTY_STDOUT() (_isatty(_fileno(stdout)) != 0)
+#else
+  #include <unistd.h>
+  #define ISATTY_STDOUT() (isatty(fileno(stdout)) != 0)
+#endif
 
+// Mutable so disable_colors() can blank them out when stdout is not a
+// TTY (piped to a file, captured by CI). With the previous const
+// literals, piping demo output to a log produced unreadable raw
+// escape sequences.
 namespace ansi {
-    const std::string reset  = "\033[0m";
-    const std::string bold   = "\033[1m";
-    const std::string dim    = "\033[2m";
-    const std::string red    = "\033[38;5;203m";
-    const std::string green  = "\033[38;5;78m";
-    const std::string yellow = "\033[38;5;221m";
-    const std::string blue   = "\033[38;5;75m";
-    const std::string mag    = "\033[38;5;213m";
-    const std::string cyan   = "\033[38;5;87m";
-    const std::string gray   = "\033[38;5;243m";
-    const std::string white  = "\033[38;5;255m";
+    std::string reset  = "\033[0m";
+    std::string bold   = "\033[1m";
+    std::string dim    = "\033[2m";
+    std::string red    = "\033[38;5;203m";
+    std::string green  = "\033[38;5;78m";
+    std::string yellow = "\033[38;5;221m";
+    std::string blue   = "\033[38;5;75m";
+    std::string mag    = "\033[38;5;213m";
+    std::string cyan   = "\033[38;5;87m";
+    std::string gray   = "\033[38;5;243m";
+    std::string white  = "\033[38;5;255m";
+}
+
+static void maybe_disable_colors() {
+    if (ISATTY_STDOUT()) return;
+    ansi::reset = ansi::bold = ansi::dim = ansi::red = ansi::green =
+        ansi::yellow = ansi::blue = ansi::mag = ansi::cyan =
+        ansi::gray = ansi::white = "";
 }
 
 static std::vector<ValuePtr> wrap_input(const std::vector<double>& x) {
@@ -326,6 +345,8 @@ int main(int argc, char** argv) {
     const uint32_t seed = 42;
     const std::vector<int> arch = {22, 32, 16, 3};
     const std::string weights_path = "data/demo_mlp.bin";
+
+    maybe_disable_colors();
 
     std::cout << "\n" << ansi::bold << ansi::white
               << "  CTG-from-scratch  ·  pure C++ neural network demo"

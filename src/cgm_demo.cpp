@@ -12,20 +12,38 @@
 #include <chrono>
 #include <algorithm>
 #include <string>
+#include <cstdio>
+#ifdef _WIN32
+  #include <io.h>
+  #define ISATTY_STDOUT() (_isatty(_fileno(stdout)) != 0)
+#else
+  #include <unistd.h>
+  #define ISATTY_STDOUT() (isatty(fileno(stdout)) != 0)
+#endif
 
+// Mutable so disable_colors() can blank them out when stdout is not a
+// TTY (piped to a file, captured by CI). With the previous const
+// literals, piping demo output to a log produced unreadable raw
+// escape sequences.
 namespace c {
-    const std::string reset  = "\033[0m";
-    const std::string bold   = "\033[1m";
-    const std::string dim    = "\033[2m";
-    const std::string red    = "\033[38;5;203m";
-    const std::string green  = "\033[38;5;78m";
-    const std::string amber  = "\033[38;5;221m";
-    const std::string blue   = "\033[38;5;75m";
-    const std::string cyan   = "\033[38;5;87m";
-    const std::string gray   = "\033[38;5;243m";
-    const std::string white  = "\033[38;5;255m";
-    const std::string teal   = "\033[38;5;80m";
-    const std::string mag    = "\033[38;5;177m";
+    std::string reset  = "\033[0m";
+    std::string bold   = "\033[1m";
+    std::string dim    = "\033[2m";
+    std::string red    = "\033[38;5;203m";
+    std::string green  = "\033[38;5;78m";
+    std::string amber  = "\033[38;5;221m";
+    std::string blue   = "\033[38;5;75m";
+    std::string cyan   = "\033[38;5;87m";
+    std::string gray   = "\033[38;5;243m";
+    std::string white  = "\033[38;5;255m";
+    std::string teal   = "\033[38;5;80m";
+    std::string mag    = "\033[38;5;177m";
+}
+
+static void maybe_disable_colors() {
+    if (ISATTY_STDOUT()) return;
+    c::reset = c::bold = c::dim = c::red = c::green = c::amber =
+        c::blue = c::cyan = c::gray = c::white = c::teal = c::mag = "";
 }
 
 struct Args {
@@ -206,6 +224,7 @@ struct ScoredWindow {
 
 int main(int argc, char** argv) {
     Args a = parse(argc, argv);
+    maybe_disable_colors();
 
     std::cout << "\n" << c::bold << c::white
               << "  CGM-DEMO  ·  pure-C++ hypoglycemia prediction on real Ohio T1DM"
