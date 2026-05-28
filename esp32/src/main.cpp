@@ -39,13 +39,15 @@ static std::uint32_t g_now_min = 0;
 static constexpr int LED_PIN = 48;
 
 // Alarm threshold in logit space. Derived from osdn-brain-ohio-clamped.json
-// test_thr_spec80.thr = 0.14 (the val-selected probability threshold that
-// achieves 80% specificity on the held-out val patients per the Step 8
-// thr-on-val fix). Logit form: logf(0.14 / 0.86) ≈ -1.8153.
+// test_thr_spec80.thr = 0.14 — the probability threshold whose selection
+// process (Step 8 thr-on-val fix) scanned val until specificity ≥ 0.80,
+// then froze that threshold and evaluated on the held-out test fold.
+// Logit form: logf(0.14 / 0.86) ≈ -1.8153.
 //
-// At this threshold the trained model achieves val recall 0.7182 and val
-// specificity 0.6771 — a deploy-honest predictive setpoint. Defaulting to
-// 0.0f (prob > 0.5) was rejected as too conservative for a predictive alarm.
+// At this frozen threshold the model reaches TEST recall 0.7182 and TEST
+// specificity 0.6771 (osdn-brain-ohio-clamped.json:test_thr_spec80) — a
+// deploy-honest predictive setpoint. Defaulting to 0.0f (prob > 0.5) was
+// rejected as too conservative for a predictive alarm.
 static constexpr float HYPO_LOGIT_THRESHOLD = -1.8153f;
 
 static float normalize(float mg_dl) {
@@ -178,7 +180,15 @@ void loop() {
         float logit = osdn_inf::forward(g_weights, g_state, g_feat,
                                         osdn_weights::LOOKBACK);
         float prob  = 1.0f / (1.0f + expf(-logit));
-        bool  alert = logit > HYPO_LOGIT_THRESHOLD;
+        // Fail-OPEN on NaN/Inf: a non-finite logit means the inference path
+        // produced an undefined result, and for a hypoglycemia predictor
+        // "I don't know" must surface as an alarm rather than silence.
+        // Naive `logit > threshold` returns false on NaN (unordered compare)
+        // and would silently mask a model blow-up. The UART parser rejects
+        // NaN inputs upstream, but an internal state explosion (e.g. the
+        // documented K=16/n_layers=2 failure envelope) can still produce
+        // NaN here, and a clinical alarm cannot be silent on that path.
+        bool  alert = !std::isfinite(logit) || logit > HYPO_LOGIT_THRESHOLD;
         digitalWrite(LED_PIN, alert ? HIGH : LOW);
         // Surface iob/cob at the final lookback step for host-side
         // cross-check against cgm_data.cpp's per-step features.
