@@ -10,6 +10,9 @@ DEMOFL   := -std=c++17 -O0 -Wall -Wextra
 SHOWFL   := -std=c++17 -O2 -Wall -Wextra
 LDFLAGS  := -Wl,--stack,268435456
 
+LOCKED_WEIGHTS  := results/osdn-brain-ohio-clamped.weights.bin.best
+LOCKED_BITIDENT := 7.96795993e-07
+
 COMMON_SRC := src/value.cpp src/nn.cpp src/data.cpp src/loss.cpp src/optim.cpp
 CTG_SRC    := $(COMMON_SRC) src/tabm.cpp src/tx.cpp src/main.cpp
 DEMO_SRC   := $(COMMON_SRC) src/demo.cpp
@@ -65,6 +68,22 @@ $(BLOB2H): $(BLOB2H_SRC)
 $(NORMSTATS): $(NORMSTATS_SRC) src/cgm_data.hpp
 	$(CXX) $(DEMOFL) $(NORMSTATS_SRC) -o $@ $(LDFLAGS)
 
+check: $(CGM_INFTEST) $(FEATTEST) $(GRAD_CHECK)
+	@echo "== check 1/3: $(CGM_INFTEST) (locked bit-identity = $(LOCKED_BITIDENT)) =="
+	@out=$$(./$(CGM_INFTEST) --H 16 --K 8 --D-in 7 --n-layers 1 --L 144 --seed 42 \
+	    --load-weights $(LOCKED_WEIGHTS)) && \
+	 echo "$$out" && \
+	 echo "$$out" | grep -q "= $(LOCKED_BITIDENT)" || \
+	   { echo "FAIL: bit-identity drift (expected $(LOCKED_BITIDENT))"; exit 1; }
+	@echo
+	@echo "== check 2/3: $(FEATTEST) =="
+	@./$(FEATTEST)
+	@echo
+	@echo "== check 3/3: $(GRAD_CHECK) =="
+	@./$(GRAD_CHECK)
+	@echo
+	@echo "== ALL CHECKS PASS =="
+
 clean:
 	rm -f src/*.o \
 	      $(CTG) $(CTG).exe \
@@ -78,4 +97,4 @@ clean:
 	      $(BLOB2H) $(BLOB2H).exe \
 	      $(NORMSTATS) $(NORMSTATS).exe
 
-.PHONY: all clean
+.PHONY: all clean check
