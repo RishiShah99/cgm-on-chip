@@ -101,7 +101,23 @@ ValuePtr vpow(const ValuePtr& a, double exponent) {
     return out;
 }
 
-ValuePtr operator/(const ValuePtr& a, const ValuePtr& b) { return a * vpow(b, -1.0); }
+ValuePtr operator/(const ValuePtr& a, const ValuePtr& b) {
+    auto out = std::make_shared<Value>(a->data / b->data,
+                                       std::vector<ValuePtr>{a, b});
+    Value* ap = a.get();
+    Value* bp = b.get();
+    Value* op = out.get();
+    out->backward_fn = [ap, bp, op]() {
+        // d/da (a/b) = 1/b ;  d/db (a/b) = -a / b²
+        // At b == 0 the forward is ±inf and the gradients diverge —
+        // emit 0 as a no-signal sentinel (same convention as vpow).
+        double b_val = bp->data;
+        if (b_val == 0.0) return;
+        ap->grad += op->grad / b_val;
+        bp->grad += -ap->data * op->grad / (b_val * b_val);
+    };
+    return out;
+}
 ValuePtr operator/(const ValuePtr& a, double b) { return a * (1.0 / b); }
 ValuePtr operator/(double a, const ValuePtr& b) { return v(a) * vpow(b, -1.0); }
 
