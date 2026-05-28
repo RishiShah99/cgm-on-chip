@@ -68,19 +68,29 @@ $(BLOB2H): $(BLOB2H_SRC)
 $(NORMSTATS): $(NORMSTATS_SRC) src/cgm_data.hpp src/brain_config.h
 	$(CXX) $(DEMOFL) $(NORMSTATS_SRC) -o $@ $(LDFLAGS)
 
-check: $(CGM_INFTEST) $(FEATTEST) $(GRAD_CHECK)
-	@echo "== check 1/3: $(CGM_INFTEST) (locked bit-identity = $(LOCKED_BITIDENT)) =="
+check: $(CGM_INFTEST) $(FEATTEST) $(GRAD_CHECK) $(CGM_TRAIN) $(CGM_DEMO)
+	@echo "== check 1/5: $(CGM_INFTEST) (locked bit-identity = $(LOCKED_BITIDENT)) =="
 	@out=$$(./$(CGM_INFTEST) --H 16 --K 8 --D-in 7 --n-layers 1 --L 144 --seed 42 \
 	    --load-weights $(LOCKED_WEIGHTS)) && \
 	 echo "$$out" && \
 	 echo "$$out" | grep -q "= $(LOCKED_BITIDENT)" || \
 	   { echo "FAIL: bit-identity drift (expected $(LOCKED_BITIDENT))"; exit 1; }
 	@echo
-	@echo "== check 2/3: $(FEATTEST) =="
+	@echo "== check 2/5: $(FEATTEST) =="
 	@./$(FEATTEST)
 	@echo
-	@echo "== check 3/3: $(GRAD_CHECK) =="
+	@echo "== check 3/5: $(GRAD_CHECK) =="
 	@./$(GRAD_CHECK)
+	@echo
+	@echo "== check 4/5: $(CGM_TRAIN) launch + data-load guard =="
+	@./$(CGM_TRAIN) --csv /nonexistent/cgm-check-stub.csv >/dev/null 2>&1; rc=$$?; \
+	 [ $$rc -eq 1 ] || { echo "FAIL: $(CGM_TRAIN) missing-CSV path returned $$rc (expected 1)"; exit 1; }; \
+	 echo "  PASS: $(CGM_TRAIN) launches, parses args, returns 1 on missing CSV"
+	@echo
+	@echo "== check 5/5: $(CGM_DEMO) launch + CLI parse =="
+	@./$(CGM_DEMO) --help >/dev/null 2>&1; rc=$$?; \
+	 [ $$rc -eq 2 ] || { echo "FAIL: $(CGM_DEMO) --help returned $$rc (expected 2: unknown-arg reject)"; exit 1; }; \
+	 echo "  PASS: $(CGM_DEMO) launches, parses args, returns 2 on unknown flag"
 	@echo
 	@echo "== ALL CHECKS PASS =="
 
