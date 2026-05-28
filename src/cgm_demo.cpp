@@ -233,7 +233,18 @@ int main(int argc, char** argv) {
               << "============================================================"
               << c::reset << "\n";
 
-    auto records = load_cgm_csv(a.csv);
+    std::vector<CGMRecord> records;
+    try {
+        records = load_cgm_csv(a.csv);
+    } catch (const std::exception& e) {
+        std::cerr << "data load failed: " << e.what() << "\n";
+        std::cerr << "expected long-format CSV with columns: patient_id,t_min,glucose,event,amount\n";
+        return 1;
+    }
+    if (records.empty()) {
+        std::cerr << "no patients parsed from " << a.csv << "\n";
+        return 1;
+    }
     PatientSplitPolicy policy;
     policy.val_ids  = split_ids(a.val_ids_csv);
     policy.test_ids = split_ids(a.test_ids_csv);
