@@ -1,4 +1,3 @@
-#include "value.hpp"
 #include "cgm_data.hpp"
 #include "cgm_net.hpp"
 #include "osdn_blob.hpp"
