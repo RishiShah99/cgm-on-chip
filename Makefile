@@ -18,6 +18,7 @@ CGM_DEMO_SRC := src/value.cpp src/complex_value.cpp src/s4d.cpp src/osdn.cpp src
 CGM_TRAIN_SRC := src/value.cpp src/loss.cpp src/optim.cpp src/complex_value.cpp src/s4d.cpp src/osdn.cpp src/cgm_data.cpp src/cgm_train.cpp
 CGM_INFTEST_SRC := src/value.cpp src/osdn.cpp src/osdn_inference_test.cpp
 FEATTEST_SRC    := esp32/src/features.cpp src/features_host_test.cpp
+GRAD_CHECK_SRC  := src/value.cpp src/grad_check.cpp
 BLOB2H_SRC      := src/blob_to_header.cpp
 NORMSTATS_SRC   := src/cgm_data.cpp tools/extract_norm_stats.cpp
 
@@ -28,6 +29,7 @@ CGM_DEMO     := cgm_demo
 CGM_TRAIN    := cgm_train
 CGM_INFTEST  := cgm_inference_test
 FEATTEST     := features_host_test
+GRAD_CHECK   := grad_check
 BLOB2H       := blob_to_header
 NORMSTATS    := extract_norm_stats
 
@@ -54,6 +56,9 @@ $(CGM_INFTEST): $(CGM_INFTEST_SRC) src/osdn_inference.h
 $(FEATTEST): $(FEATTEST_SRC) esp32/src/features.h
 	$(CXX) $(CXXFLAGS) $(FEATTEST_SRC) -o $@ $(LDFLAGS)
 
+$(GRAD_CHECK): $(GRAD_CHECK_SRC) src/value.hpp
+	$(CXX) $(CXXFLAGS) $(GRAD_CHECK_SRC) -o $@ $(LDFLAGS)
+
 $(BLOB2H): $(BLOB2H_SRC)
 	$(CXX) $(CXXFLAGS) $(BLOB2H_SRC) -o $@ $(LDFLAGS)
 
@@ -69,6 +74,7 @@ clean:
 	      $(CGM_TRAIN) $(CGM_TRAIN).exe \
 	      $(CGM_INFTEST) $(CGM_INFTEST).exe \
 	      $(FEATTEST) $(FEATTEST).exe \
+	      $(GRAD_CHECK) $(GRAD_CHECK).exe \
 	      $(BLOB2H) $(BLOB2H).exe \
 	      $(NORMSTATS) $(NORMSTATS).exe
 
