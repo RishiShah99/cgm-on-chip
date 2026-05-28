@@ -1,14 +1,15 @@
 # cgm-on-chip
 
-OSDN, a brand-new linear-attention model that learns to tune its own memory as it reads (AdaGrad for the architectures trying to replace the transformer), alongside S4D (a proven state-space model from the line that led to Mamba), both reimplemented from scratch in pure C++ with their own autograd engine, trained on real clinical data, and run on a $4 microcontroller to predict hypoglycemia 60 minutes ahead.
+## What this repository is: 
+This repository reimplements OSDN, a brand-new linear-attention model that learns to tune its own memory as it reads (AdaGrad for the architectures trying to replace the transformer), alongside S4D (a proven state-space model from the line that led to Mamba) in pure C++ with their own autograd engine, trained on real clinical data, and run on a $4 microcontroller to predict hypoglycemia 60 minutes ahead.
 
 Everything in this repository is built from the C++17 standard library. No PyTorch, no TensorFlow, no Eigen, no BLAS, no OpenMP. The automatic differentiation engine, the optimizer, the multi-threaded trainer, the data pipeline, two model architectures, the on-disk weight format, the embedded inference kernel, and a triple-redundant correctness proof tying them together are roughly 5,500 lines of C++.
 
-The shipped artifact is a trained model whose FP32 inference kernel runs on an **ESP32-S3 in 20% of its RAM**, raising a hypoglycemia alarm an hour before onset, verified to agree with the FP64 training reference to **8 decimal places**.
+The shipped artifact is a trained model whose FP32 inference kernel runs on an ESP32-S3 in 20% of its RAM, raising a hypoglycemia alarm an hour before onset, verified to agree with the FP64 training reference to 8 decimal places.
 
 ## Overview
 
-Each layer below is something most stacks would simply `import`. The work here was building the whole thing from primitives.
+Each layer below is something most stacks would simply `import`.
 
 ### The math engine
 A **scalar reverse-mode automatic differentiation engine** (`src/value.{hpp,cpp}`, 268 lines). Every arithmetic operation is a heap node that records a closure for pushing gradients backward, and `backward()` runs an explicit-stack topological traversal (plain recursion overflows the stack on a 144-step graph). It is extended to **complex numbers** (`src/complex_value.{hpp,cpp}`) so the S4D model's complex hidden state backpropagates through the same engine. In a normal stack this is `torch.autograd`.
